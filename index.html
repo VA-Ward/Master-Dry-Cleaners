@@ -168,6 +168,15 @@ table.score tr.sel:hover td{background:var(--hiband-solid)}
 .empty{display:flex;gap:14px;align-items:flex-start;background:var(--surface-2);border:1px dashed var(--axis);border-radius:10px;padding:16px 18px;color:var(--ink-2)}
 .empty strong{display:block;color:var(--ink-1);margin-bottom:2px}
 .svc-key{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:8px;vertical-align:-1px}
+.svc-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:0 0 14px}
+.svc-stat{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+.svc-stat .label{font-size:12px;color:var(--ink-2);font-weight:500}
+.svc-stat .v{font-size:19px;font-weight:650;letter-spacing:-.01em;margin:2px 0 4px}
+.svc-stat .cmp{display:grid;gap:1px;font-size:12px}
+.svc-highlight{margin:0 0 10px;color:var(--ink-2);font-size:13px}
+.sub-h{font-size:14px;margin:20px 0 8px}
+@media (max-width:980px){ .svc-stats{grid-template-columns:repeat(3,minmax(0,1fr))} }
+@media (max-width:560px){ .svc-stats{grid-template-columns:repeat(2,minmax(0,1fr))} }
 
 /* ---------- footer ---------- */
 .foot{padding:8px 0 40px;color:var(--ink-3);font-size:12.5px}
@@ -216,6 +225,8 @@ input:focus{outline:2px solid var(--brand);outline-offset:0;border-color:transpa
 .summary{margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .summary .ok{padding:10px 12px;display:grid;gap:3px;font-size:13px}
 .summary .ok strong{color:var(--good)}
+.summary .ok strong.need{color:var(--warn)}
+.summary .ok span+strong{margin-top:6px}
 .summary .warns{border-top:1px solid var(--line);background:var(--warn-bg);color:var(--warn);padding:10px 12px;font-size:12.5px}
 .summary .warns ul{margin:6px 0 0;padding-left:18px;display:grid;gap:3px}
 .summary .bad{padding:10px 12px;color:var(--bad);font-size:13px}
@@ -274,7 +285,7 @@ input:focus{outline:2px solid var(--brand);outline-offset:0;border-color:transpa
   <main><div class="wrap" id="main"></div></main>
   <footer class="foot">
     <div class="wrap">
-      <p><b>How the numbers work.</b> The 12-week average is the average of the last 12 weeks of sales (the “Avg - 3 Months” column in the workbook). “Last year” is the same week 52 weeks earlier. Every change is measured against the earlier figure, so +10% vs last year means 10% more than last year’s week. Butler is shown excluding DRYZ, with DRYZ on its own line; All stores includes both.</p>
+      <p><b>How the numbers work.</b> The 12-week average is the average of the last 12 weeks of sales (the “Avg - 3 Months” column in the workbook). “Last year” is the same week 52 weeks earlier. Every change is measured against the earlier figure, so +10% vs last year means 10% more than last year’s week. Butler is shown excluding DRYZ, with DRYZ on its own line; All stores includes both. Services come from the monthly Store Sales by Item report, so they compare month to month, and Butler’s service figures include DRYZ.</p>
       <p id="sourceLine"></p>
       <div class="links"><button class="linkbtn" id="openUpdate">Update data</button><button class="linkbtn" id="lockDevice" hidden>Forget the passcode on this device</button><button class="linkbtn" id="printBtn">Print or save as PDF</button></div>
     </div>
@@ -287,10 +298,10 @@ input:focus{outline:2px solid var(--brand);outline-offset:0;border-color:transpa
     <div class="panel-head"><h2 id="panelTitle">Update the dashboard</h2><button class="icon-btn" id="panelClose" aria-label="Close">×</button></div>
 
     <section class="step">
-      <h3><span class="n">1</span>This week’s workbook</h3>
+      <h3><span class="n">1</span>This week’s files</h3>
       <label class="drop" id="drop" tabindex="0">
-        <input type="file" id="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
-        <strong>Drop the Excel file here</strong><span>or click to choose it — nothing is sent anywhere until you publish</span>
+        <input type="file" id="file" multiple accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+        <strong>Drop the Excel files here</strong><span>the weekly sales workbook, plus the Store Sales by Item report when it has a new month — or click to choose them. Nothing is sent anywhere until you publish.</span>
       </label>
       <div id="parseResult"></div>
     </section>
@@ -572,34 +583,17 @@ function resolveSequence(raw, sheet, d1904, warn){
   });
   return out;
 }
-function interpretWorkbook(wbk, fileName){
+/* ---------- weekly sales workbook: one tab per store ---------- */
+function interpretSales(wbk, fileName){
   const warnings = [], warn = m => warnings.push(m);
-  const sheets = []; let svc = null, svcCount = 0;
+  const sheets = [];
   for (const sh of wbk.sheets){
     if (sh.state !== 'visible') continue;
     const hdr = findHeader(sh.rows); if (!hdr) continue;
     const heads = [...hdr.row].filter(([, v]) => typeof v === 'string').map(([c, v]) => [c, v.trim()]);
     const col = re => (heads.find(([, v]) => re.test(v)) || [])[0] || null;
-    const salesCol = col(/^sales$/i), discCol = col(/^discounts?$/i), storeCol = col(/^stores?$/i);
+    const salesCol = col(/^sales$/i), discCol = col(/^discounts?$/i);
     const rowNums = [...sh.rows.keys()].filter(r => r > hdr.r).sort((a, b) => a - b);
-    if (storeCol){
-      svcCount++;
-      if (svc){ warn(`More than one Services tab found — only “${svc.name}” was used.`); continue; }
-      const svcCols = heads.filter(([c, v]) => c > storeCol && v && !/^(total|notes?|comments?)\b/i.test(v)).sort((a, b) => a[0] - b[0]);
-      const rows = [];
-      for (const r of rowNums){
-        const row = sh.rows.get(r);
-        const vals = svcCols.map(([c]) => toNum(row.get(c)));
-        if (vals.every(v => v == null)) continue;
-        const bad = svcCols.find(([c]) => row.has(c) && toNum(row.get(c)) == null);
-        if (bad) warn(`${sh.name} row ${r}: “${row.get(bad[0])}” under ${bad[1]} isn’t a number — left blank.`);
-        const wk = row.get(hdr.weekCol), st = row.get(storeCol);
-        if (wk == null || st == null || String(st).trim() === ''){ warn(`${sh.name} row ${r}: needs both a week ending and a store — row skipped.`); continue; }
-        rows.push({r, wk, store: String(st).trim(), v: vals.map(v => v == null ? null : round2(v))});
-      }
-      svc = {name: sh.name, columns: svcCols.map(([, v]) => v), rows};
-      continue;
-    }
     if (!salesCol) continue;
     const raw = [];
     for (const r of rowNums){
@@ -617,35 +611,7 @@ function interpretWorkbook(wbk, fileName){
     if (!rows.length){ warn(`${sh.name}: no weekly sales found under the headings.`); continue; }
     sheets.push({name: sh.name, weeks: rows.map(x => x.week), sales: rows.map(x => x.s), disc: rows.map(x => x.d)});
   }
-  if (!sheets.length) throw new Error('No store tabs found. Each store tab needs a “week ending” heading with “Sales” and “Discounts” columns beside it.');
-
-  // services: match dates to the weeks in the store tabs (MM.DD.YY like the store tabs)
-  let services = null;
-  if (svc){
-    const known = new Set(sheets.flatMap(s => s.weeks));
-    const latestSales = [...known].sort().pop();
-    const names = new Set(sheets.map(s => norm(prettyName(s.name))));
-    if (sheets.some(s => /dryz/i.test(s.name))) names.add('dryz');
-    const out = new Map(), unknown = new Set();
-    // Score each reading of the date: a Sunday, close to the current weeks, already a week in the store tabs,
-    // and the MM.DD.YY order the store tabs use. The best score wins.
-    const near = iso => Math.abs(daysBetween(iso, latestSales)) <= 120;
-    const score = x => (dow(x.iso) === 0 ? 4 : 0) + (near(x.iso) ? 2 : 0) + (known.has(x.iso) ? 2 : 0) + (x.f === 'dmy' ? 0 : 1);
-    for (const r of svc.rows){
-      const c = dateCands(r.wk, wbk.d1904).sort((a, b) => score(b) - score(a));
-      const iso = c.length ? c[0].iso : null;
-      if (!iso){ warn(`${svc.name} row ${r.r}: couldn’t read the week ending “${r.wk}” — row skipped.`); continue; }
-      if (dow(iso) !== 0) warn(`${svc.name} row ${r.r}: ${fLong(iso)} isn’t a Sunday — check the week ending.`);
-      else if (!near(iso) && c.some(x => x.iso !== iso && near(x.iso))) warn(`${svc.name} row ${r.r}: “${r.wk}” was read as ${fMed(iso)}. If you meant ${fMed(c.find(x => x.iso !== iso && near(x.iso)).iso)}, type it as month.day.year like the store tabs.`);
-      else if (!known.has(iso)) warn(`${svc.name} row ${r.r}: ${fMed(iso)} isn’t a week in the store tabs yet.`);
-      if (!names.has(norm(r.store))) unknown.add(r.store);
-      const key = iso + '|' + norm(r.store);
-      if (out.has(key)) warn(`${svc.name}: two rows for ${r.store} in the week ending ${fMed(iso)} — used the lower one (row ${r.r}).`);
-      out.set(key, {week: iso, store: r.store, v: r.v});
-    }
-    for (const u of unknown) warn(`${svc.name}: “${u}” doesn’t match a store tab, so it only counts towards All stores.`);
-    services = {columns: svc.columns, rows: [...out.values()].sort((a, b) => a.week < b.week ? -1 : a.week > b.week ? 1 : 0)};
-  }
+  if (!sheets.length) return null;
 
   // stores that haven't been brought up to date
   const lastWeek = sheets.map(s => s.weeks[s.weeks.length - 1]).sort().pop();
@@ -658,7 +624,91 @@ function interpretWorkbook(wbk, fileName){
         : `${s.name} stops at ${fMed(l)}, so it’s treated as no longer trading. Hide the tab if that’s right.`);
     }
   }
-  return {format: FORMAT, schema: SCHEMA, source: fileName, generatedAt: new Date().toISOString(), sheets, services, _warnings: warnings, _svcTabs: svcCount};
+  return {source: fileName, sheets, warnings};
+}
+
+/* ---------- Store Sales by Item report: one tab per store, a block of columns per month ----------
+   Each month block is a pasted POS export, so its rows can be in a different order from the
+   month beside it. The service name is therefore read from each block's own first column.        */
+const MONTHS_LC = MONL.map(m => m.toLowerCase());
+const MONTH_RE = /^\s*(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{4})\s*$/i;
+function monthLabel(v){
+  if (typeof v !== 'string') return null;
+  const m = v.match(MONTH_RE); if (!m) return null;
+  return {y: +m[2], m: MONTHS_LC.findIndex(n => n.startsWith(m[1].toLowerCase().slice(0, 3))) + 1};
+}
+const ym = (y, m) => y + '-' + String(m).padStart(2, '0');
+const addMonths = (mo, n) => { const [y, m] = mo.split('-').map(Number); const t = y * 12 + (m - 1) + n; return ym(Math.floor(t / 12), (t % 12) + 1); };
+const monthLong = mo => { const [y, m] = mo.split('-').map(Number); return MONL[m - 1] + ' ' + y; };
+const monthShort = mo => { const [y, m] = mo.split('-').map(Number); return MON[m - 1] + ' ’' + String(y).slice(2); };
+
+function interpretServices(wbk, fileName){
+  const warnings = [], warn = m => warnings.push(m);
+  const stores = [];
+  for (const sh of wbk.sheets){
+    if (sh.state !== 'visible') continue;
+    const rowNums = [...sh.rows.keys()].sort((a, b) => a - b);
+    const heads = rowNums.filter(r => [...sh.rows.get(r).values()].filter(monthLabel).length >= 2);
+    if (!heads.length) continue;
+    let store = sh.name;                                   // "Master Dry Cleaners - Seddon" → Seddon
+    for (const r of rowNums){
+      if (r >= heads[0]) break;
+      for (const v of sh.rows.get(r).values()) if (typeof v === 'string' && / - /.test(v)) store = v.split(' - ').pop().trim() || store;
+    }
+    const months = new Map();
+    heads.forEach((hr, hi) => {
+      const end = hi + 1 < heads.length ? heads[hi + 1] - 1 : Infinity;
+      const hrow = sh.rows.get(hr);
+      const blocks = [...hrow].filter(([, v]) => monthLabel(v)).map(([c, v]) => ({c, ...monthLabel(v)})).sort((a, b) => a.c - b.c);
+      // the row's year is the one most of its months agree on (fixes a stray "March 2025" among the 2026 months)
+      const count = {}; blocks.forEach(b => { count[b.y] = (count[b.y] || 0) + 1; });
+      const year = +Object.entries(count).sort((a, b) => b[1] - a[1])[0][0];
+      for (const b of blocks) if (b.y !== year){
+        warn(`${sh.name}: the heading “${MONL[b.m - 1]} ${b.y}” sits among the ${year} months, so it was read as ${MONL[b.m - 1]} ${year}. Worth fixing in the report.`);
+        b.y = year;
+      }
+      const stray = [...hrow].find(([c, v]) => typeof v === 'string' && v.trim() && !monthLabel(v) && c > blocks[0].c);
+      if (stray) warn(`${sh.name}: “${stray[1]}” and some figures sit in the ${year} month heading row rather than under a month, so they were left out.`);
+      const width = blocks.length > 1 ? blocks[1].c - blocks[0].c : 8;
+      const mrow = sh.rows.get(hr + 1) || new Map();
+      for (const b of blocks){
+        const off = {s: 1, d: 2, o: 3, p: 4};              // $ Sales, $ Discounts, # Order, # Pieces
+        const seen = new Set();
+        for (let k = 1; k < width; k++){
+          const t = String(mrow.get(b.c + k) || '').toLowerCase();
+          if (!t || t.includes('/')) continue;             // skip $ / Order, $ / Piece …
+          const key = t.includes('discount') ? 'd' : t.includes('sale') ? 's' : t.includes('order') ? 'o' : t.includes('piece') ? 'p' : null;
+          if (key && !seen.has(key)){ off[key] = k; seen.add(key); }
+        }
+        const mo = ym(b.y, b.m);
+        if (months.has(mo)) warn(`${sh.name}: ${monthLong(mo)} appears twice — used the lower one.`);
+        const items = new Map();
+        for (const r of rowNums){
+          if (r <= hr + 1 || r > end) continue;
+          const row = sh.rows.get(r), label = row.get(b.c);
+          if (typeof label !== 'string' || !label.trim()) continue;
+          const s = toNum(row.get(b.c + off.s)), d = toNum(row.get(b.c + off.d)), o = toNum(row.get(b.c + off.o)), p = toNum(row.get(b.c + off.p));
+          if (s == null && o == null && p == null) continue;
+          const name = label.trim().replace(/\s+/g, ' ');
+          const cur = items.get(name) || {s: 0, d: 0, o: 0, p: 0};
+          cur.s += s || 0; cur.d += d || 0; cur.o += o || 0; cur.p += p || 0;
+          items.set(name, cur);
+        }
+        if (items.size) months.set(mo, items);
+      }
+    });
+    if (months.size) stores.push({store, months});
+  }
+  if (!stores.length) return null;
+  // compact, case-insensitive item names → indexes
+  const itemNames = [], itemIdx = new Map(), monthList = [...new Set(stores.flatMap(s => [...s.months.keys()]))].sort();
+  const idx = n => { const k = n.toLowerCase(); if (!itemIdx.has(k)){ itemIdx.set(k, itemNames.length); itemNames.push(n); } return itemIdx.get(k); };
+  const rows = [];
+  stores.forEach((st, si) => {
+    for (const [mo, items] of st.months) for (const [name, v] of items)
+      rows.push([si, monthList.indexOf(mo), idx(name), round2(v.s), round2(v.d), Math.round(v.o), Math.round(v.p)]);
+  });
+  return {services: {grain: 'month', source: fileName, stores: stores.map(s => s.store), months: monthList, items: itemNames, rows}, warnings};
 }
 
 /* =====================================================================
@@ -722,19 +772,23 @@ function buildModel(data){
   const totalWeeks = [...total.keys()].sort();
   const latest = totalWeeks[totalWeeks.length - 1] || maxWeek;
 
-  // services
+  // services (monthly, from the Store Sales by Item report): month → service → {s, d, o, p}
   let services = null;
-  if (data.services){
-    const cols = data.services.columns || [];
-    const byLine = new Map(), all = new Map();
-    const lineOf = new Map(lines.map(l => [norm(l.name), l.id]));
-    const add = (map, w, v) => { const cur = map.get(w) || cols.map(() => null); v.forEach((x, i) => { if (fin(x)) cur[i] = round2((cur[i] || 0) + x); }); map.set(w, cur); };
-    for (const r of data.services.rows || []){
-      add(all, r.week, r.v);
-      const id = lineOf.get(norm(r.store));
-      if (id){ if (!byLine.has(id)) byLine.set(id, new Map()); add(byLine.get(id), r.week, r.v); }
+  const SV = data.services;
+  if (SV && SV.grain === 'month' && Array.isArray(SV.rows)){
+    const per = SV.stores.map(() => new Map()), all = new Map();
+    const add = (map, mo, it, s, d, o, p) => {
+      let mm = map.get(mo); if (!mm){ mm = new Map(); map.set(mo, mm); }
+      const c = mm.get(it) || {s: 0, d: 0, o: 0, p: 0};
+      c.s = round2(c.s + s); c.d = round2(c.d + d); c.o += o; c.p += p; mm.set(it, c);
+    };
+    for (const [si, mi, ii, s, d, o, p] of SV.rows){
+      const mo = SV.months[mi], it = SV.items[ii];
+      add(per[si], mo, it, s, d, o, p); add(all, mo, it, s, d, o, p);
     }
-    services = {cols, byLine, all, count: (data.services.rows || []).length};
+    const lineFor = new Map();     // dashboard line → store in the report ("The Butler" → Butler)
+    SV.stores.forEach((nm, si) => { const k = norm(String(nm).replace(/^\s*the\s+/i, '')); const l = lines.find(x => norm(x.name) === k); if (l) lineFor.set(l.id, si); });
+    services = {source: SV.source, stores: SV.stores, months: [...SV.months].sort(), per, all, lineFor};
   }
   return {lines, total: totalLine, weeks, totalWeeks, latest, services, data};
 }
@@ -850,10 +904,11 @@ function render(){
   drawAllCharts();
   const bar = $('#previewBar');
   bar.hidden = !state.preview;
-  if (state.preview) $('#previewText').textContent = `Previewing “${state.previewName}” — this isn’t on the live dashboard until you publish it.`;
+  if (state.preview) $('#previewText').textContent = `Previewing ${state.previewName} — this isn’t on the live dashboard until you publish it.`;
   $('#lockDevice').hidden = !state.encrypted || !store.get('passcode');
+  const svcSrc = M.data.services && M.data.services.source ? ` and “${M.data.services.source}”` : '';
   const pubLine = state.preview ? `Preview of ${state.previewName}.` :
-    `Figures from “${(M.data.source || 'the weekly workbook')}”${state.publishedAt ? ', published ' + melbourneTime(state.publishedAt) : ''}.`;
+    `Figures from “${(M.data.source || 'the weekly workbook')}”${svcSrc}${state.publishedAt ? ', published ' + melbourneTime(state.publishedAt) : ''}.`;
   $('#sourceLine').textContent = pubLine;
 }
 function renderMeta(M, w){
@@ -1058,8 +1113,9 @@ function plotFrame(host, spec, legendItems, yMaxVal){
   const pw = W - m.l - m.r, ph = H - m.t - m.b, n = spec.isos.length, bw = pw / n;
   const {top, ticks} = niceScale(yMaxVal);
   const y = v => m.t + ph - (v / top) * ph, base = m.t + ph;
+  const unit = spec.monthly ? 'month' : 'week';
   const svg = sv('svg', {viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'chart-svg', role: 'img', tabindex: 0,
-    'aria-label': spec.label + '. Use the left and right arrow keys to read each week. The table below has every value.'});
+    'aria-label': `${spec.label}. Use the left and right arrow keys to read each ${unit}. The table has every value.`});
   for (const t of ticks){
     svg.append(sv('line', {x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: t === 0 ? 'axis' : 'grid'}));
     svg.append(sv('text', {x: m.l - 8, y: y(t), class: 'ytick', 'text-anchor': 'end', 'dominant-baseline': 'middle'}, compact(t)));
@@ -1070,7 +1126,7 @@ function plotFrame(host, spec, legendItems, yMaxVal){
   const step = Math.max(1, Math.ceil((narrow ? 40 : 46) / bw));
   spec.isos.forEach((iso, i) => {
     if ((n - 1 - i) % step) return;
-    svg.append(sv('text', {x: m.l + i * bw + bw / 2, y: H - 8, class: 'xtick' + (i === spec.hi ? ' cur' : ''), 'text-anchor': 'middle'}, fShort(iso)));
+    svg.append(sv('text', {x: m.l + i * bw + bw / 2, y: H - 8, class: 'xtick' + (i === spec.hi ? ' cur' : ''), 'text-anchor': 'middle'}, spec.monthly ? monthShort(iso) : fShort(iso)));
   });
   plot.append(svg);
   return {svg, plot, W, H, m, pw, ph, n, bw, y, base, hover};
@@ -1083,7 +1139,7 @@ function attachHover(f, spec, rowsFor){
     cur = i;
     hover.setAttribute('x', m.l + i * bw); hover.setAttribute('visibility', 'visible');
     const r = svg.getBoundingClientRect(), scale = r.width / f.W;
-    showTip(r.left + (m.l + i * bw + bw / 2) * scale, r.top + m.t * scale, bw * scale / 2, 'Week ending ' + fMed(spec.isos[i]), rowsFor(i));
+    showTip(r.left + (m.l + i * bw + bw / 2) * scale, r.top + m.t * scale, bw * scale / 2, spec.monthly ? monthLong(spec.isos[i]) : 'Week ending ' + fMed(spec.isos[i]), rowsFor(i));
   };
   const hide = () => { cur = -1; hover.setAttribute('visibility', 'hidden'); hideTip(); };
   const idx = e => { const r = svg.getBoundingClientRect(); return Math.floor(((e.clientX - r.left) * f.W / r.width - m.l) / bw); };
@@ -1209,60 +1265,106 @@ function detailSection(line, w){
     h('p', {class: 'table-note'}, 'Green ▲ / red ▼ on the 12-week average: up or down on the week before. “vs last year” compares each week with the same week 52 weeks earlier.'));
 }
 
-/* ---------- services ---------- */
+/* ---------- services (monthly, from the Store Sales by Item report) ---------- */
+function svcTotals(mm){
+  if (!mm) return null;
+  let s = 0, d = 0, o = 0, p = 0;
+  for (const v of mm.values()){ s += v.s; d += v.d; o += v.o; p += v.p; }
+  return {s: round2(s), d: round2(d), o, p};
+}
+const int = v => fin(v) ? Math.round(v).toLocaleString('en-AU') : '—';
 function servicesSection(M, line, w){
   const S = M.services;
-  const name = line.name + (line.note ? ' (' + line.note + ')' : '');
-  const head = h('div', {class: 'card-head'}, h('h2', {text: 'Services'}), h('p', {class: 'muted', text: `${name} · week ending ${fMed(w)}`}));
-  const card = h('section', {class: 'card'}, head);
+  const card = h('section', {class: 'card', id: 'services'});
+  const head = sub => card.append(h('div', {class: 'card-head'}, h('h2', {text: 'Services'}), h('p', {class: 'muted', text: sub})));
   const empty = (title, text) => { card.append(h('div', {class: 'empty'}, h('div', null, h('strong', {text: title}), h('span', {text: text})))); return card; };
-  if (!S || !S.cols.length) return empty('No Services tab in this workbook', 'Add the Services tab to the workbook (one row per store each week, with a column for each service) and publish again to see service sales here.');
-  if (!S.count) return empty('No service figures yet', 'Fill in the Services tab in the workbook — one row per store each week — then publish. This section will show each service week to week.');
-  const map = line.isTotal ? S.all : S.byLine.get(line.id);
-  if (!map || !map.size) return empty(`No service figures for ${line.name} yet`, 'Add this store’s rows to the Services tab to see its service mix.');
-  const cols = S.cols, cur = map.get(w), prev = map.get(addDays(w, -7)), lyv = map.get(addDays(w, -364));
-  const last12 = rangeWeeks(w, 12);
-  const curTotal = cur ? cur.reduce((s, v) => s + (fin(v) ? v : 0), 0) : null;
-  const prevTotal = prev ? prev.reduce((s, v) => s + (fin(v) ? v : 0), 0) : null;
-  const weeksWithData = last12.filter(wk => map.has(wk)).length;
-  const colour = i => `var(--s${(i % 8) + 1})`;
-  const rows = cols.map((c, j) => {
-    const vals12 = last12.map(wk => { const r = map.get(wk); return r && fin(r[j]) ? r[j] : (r ? 0 : null); });
-    const have = vals12.filter(fin); const a = have.length ? have.reduce((s, v) => s + v, 0) / have.length : null;
-    const tv = cur ? (fin(cur[j]) ? cur[j] : 0) : null, pv = prev ? (fin(prev[j]) ? prev[j] : 0) : null;
-    const lv = lyv ? (fin(lyv[j]) ? lyv[j] : 0) : null;
-    return h('tr', null,
-      h('td', null, h('i', {class: 'svc-key', style: {background: colour(j)}, 'aria-hidden': 'true'}), c),
-      h('td', null, money(tv)), h('td', null, money(pv)),
-      h('td', {class: fin(tv) && fin(pv) ? (tv - pv > 0.004 ? 'pos' : tv - pv < -0.004 ? 'neg' : '') : 'muted'}, fin(tv) && fin(pv) ? sMoney(tv - pv) : '—'),
-      pctCell(fin(tv) && fin(pv) && pv > 0 ? change(tv, pv) : null),
-      h('td', null, money(a)), pctCell(fin(tv) && fin(lv) && lv > 0 ? change(tv, lv) : null),
-      h('td', null, fin(tv) && curTotal > 0 ? pPct(tv / curTotal) : '—'),
-      h('td', null, spark(vals12, 96, 24)));
-  });
-  const tbl = h('table', {class: 'data'},
-    h('thead', null, h('tr', null, ['Service', 'This week', 'Last week', 'Change', 'Change %', weeksWithData >= 12 ? '12-week avg' : `Avg (${weeksWithData} wk${weeksWithData === 1 ? '' : 's'})`, 'vs last year', 'Share', 'Last 12 weeks'].map(t => h('th', {scope: 'col'}, t)))),
-    h('tbody', null, rows),
-    h('tfoot', null, h('tr', null, h('td', null, 'All services'), h('td', null, money(curTotal)), h('td', null, money(prevTotal)),
-      h('td', null, fin(curTotal) && fin(prevTotal) ? sMoney(curTotal - prevTotal) : '—'), pctCell(change(curTotal, prevTotal)), h('td', null, ''), h('td', null, ''), h('td', null, fin(curTotal) ? '100%' : '—'), h('td', null, ''))));
-  if (!cur) card.append(h('div', {class: 'empty', style: {marginBottom: '12px'}}, h('div', null, h('strong', {text: 'No service figures for this week yet'}), h('span', {text: `Showing the weeks that have been filled in. Add ${line.isTotal ? 'each store’s' : line.name + '’s'} row for ${fMed(w)} to the Services tab.`}))));
-  card.append(h('div', {class: 'table-scroll'}, tbl));
-  const st = line.map.get(w);
-  if (fin(curTotal) && st) card.append(h('p', {class: 'table-note'}, `Services entered for this week add up to ${money(curTotal)}; ${line.isTotal ? 'total' : 'the store’s'} sales for the week were ${money(st.s)}.`));
-  // stacked chart over the selected range; fold anything past 8 services into "Other services"
-  const isos = rangeWeeks(w, state.sel.range);
-  let series = cols.map((c, j) => ({name: c, color: colour(j), values: isos.map(wk => { const r = map.get(wk); return r && fin(r[j]) ? r[j] : null; })}));
-  if (series.length > 8){
-    const tot = s => s.values.filter(fin).reduce((a, b) => a + b, 0);
-    const order = series.map((s, j) => ({s, j, t: tot(s)})).sort((a, b) => b.t - a.t);
-    const keep = new Set(order.slice(0, 7).map(o => o.j));
-    const rest = series.filter((_, j) => !keep.has(j));
-    series = series.filter((_, j) => keep.has(j));
-    series.push({name: 'Other services', color: 'var(--s8)', values: isos.map((_, i) => { const v = rest.map(s => s.values[i]).filter(fin); return v.length ? v.reduce((a, b) => a + b, 0) : null; })});
+  const who = line.isTotal ? 'All stores' : line.name;
+  if (!S){
+    head('Month to month, from the Store Sales by Item report');
+    return empty('No service report yet', 'Drop the Store Sales by Item report into the update page along with the weekly workbook, then publish. This section then shows each service month to month.');
   }
-  const host = h('div', {class: 'chart', style: {marginTop: '16px'}});
-  charts.push({host, type: 'stack', spec: {isos, hi: isos.length - 1, label: `Service sales by week for ${name}`, series}});
-  card.append(h('h3', {style: {fontSize: '14px', margin: '18px 0 8px'}, text: 'Service sales by week'}), host);
+  let map = null;
+  if (line.isTotal) map = S.all; else if (S.lineFor.has(line.id)) map = S.per[S.lineFor.get(line.id)];
+  if (!map){
+    head(`${who} · month to month`);
+    if (line.id === 'dryz') return empty('DRYZ isn’t split out in the service report', 'Its work is included in Butler’s service figures.');
+    return empty(`${line.name} isn’t in the service report`, `The Store Sales by Item report has tabs for ${S.stores.join(', ')}. Add a ${line.name} tab to the report to see its services here.`);
+  }
+  const wm = w.slice(0, 7);
+  const have = S.months.filter(x => map.has(x));
+  const mo = have.slice().reverse().find(x => x <= wm) || null;
+  if (!mo){ head(`${who} · month to month`); return empty('No service figures for this period', `The service report starts in ${monthLong(have[0] || S.months[0])}.`); }
+  const prevMo = addMonths(mo, -1), lyMo = addMonths(mo, -12);
+  const cur = map.get(mo), prev = map.get(prevMo) || null, ly = map.get(lyMo) || null;
+  const T = svcTotals(cur), TP = svcTotals(prev), TL = svcTotals(ly);
+  const note = line.note === 'excl. DRYZ' ? ' (services include DRYZ)' : '';
+  head(`${who}${note} · ${monthLong(mo)}${mo < wm ? ', the latest month in the report' : ''}`);
+
+  // headline figures for the month
+  const cmp = (a, b, vs) => { const p = fin(a) && fin(b) && b !== 0 ? change(a, b) : null; return h('span', {class: fin(p) ? (p > 0.0005 ? 'pos' : p < -0.0005 ? 'neg' : '') : 'muted'}, fin(p) ? `${sPct(p)} vs ${vs}` : `— vs ${vs}`); };
+  const ratio = (t, k) => t && t[k] > 0 ? t.s / t[k] : null;
+  const stat = (label, val, a, b, fmt) => h('div', {class: 'svc-stat'}, h('div', {class: 'label', text: label}), h('div', {class: 'v', text: fmt(val)}),
+    h('div', {class: 'cmp'}, cmp(val, a, 'last month'), cmp(val, b, 'last year')));
+  card.append(h('div', {class: 'svc-stats'},
+    stat('Service sales', T.s, TP && TP.s, TL && TL.s, money),
+    stat('Orders', T.o, TP && TP.o, TL && TL.o, int),
+    stat('Pieces', T.p, TP && TP.p, TL && TL.p, int),
+    stat('Average per order', ratio(T, 'o'), ratio(TP, 'o'), ratio(TL, 'o'), money),
+    stat('Average per piece', ratio(T, 'p'), ratio(TP, 'p'), ratio(TL, 'p'), money)));
+
+  // chart series: the 7 biggest services over the last 12 months, the rest folded together
+  const months12 = Array.from({length: 12}, (_, k) => addMonths(mo, k - 11));
+  const tot12 = new Map();
+  for (const m12 of months12){ const mm = map.get(m12); if (mm) for (const [it, v] of mm) tot12.set(it, (tot12.get(it) || 0) + v.s); }
+  const ranked = [...tot12].filter(([, t]) => t > 0).sort((a, b) => b[1] - a[1]).map(([it]) => it);
+  const top = ranked.slice(0, ranked.length > 8 ? 7 : 8);
+  const colourOf = new Map(top.map((it, i) => [it, `var(--s${i + 1})`]));
+  const OTHER = 'Everything else';
+
+  // table rows: every service with figures this month or last month, biggest first
+  const names = [...new Set([...cur.keys(), ...(prev ? prev.keys() : [])])].filter(it => {
+    const a = cur.get(it), b = prev && prev.get(it);
+    return (a && (Math.abs(a.s) > 0.004 || a.p)) || (b && Math.abs(b.s) > 0.004);
+  }).sort((a, b) => ((cur.get(b) || {}).s || 0) - ((cur.get(a) || {}).s || 0));
+  const showAll = !!state.sel.svcAll, LIMIT = 10;
+  const shown = showAll || names.length <= LIMIT + 1 ? names : names.slice(0, LIMIT);
+  const rest = names.filter(n => !shown.includes(n));
+  const rowFor = (label, a, b, c, key, spk) => h('tr', null,
+    h('td', null, h('i', {class: 'svc-key', style: {background: key || 'var(--ly)'}, 'aria-hidden': 'true'}), label),
+    h('td', null, money(a ? a.s : 0)), pctCell(a && b && b.s > 0 ? change(a.s, b.s) : null), pctCell(a && c && c.s > 0 ? change(a.s, c.s) : null),
+    h('td', null, int(a ? a.p : 0)), h('td', null, a && a.p > 0 ? money(a.s / a.p) : '—'),
+    h('td', null, a && T.s > 0 ? pPct(a.s / T.s) : '—'), h('td', null, spk));
+  const sumOf = (mm, list) => { if (!mm) return null; const t = {s: 0, d: 0, o: 0, p: 0}; for (const n of list){ const v = mm.get(n); if (v){ t.s += v.s; t.o += v.o; t.p += v.p; } } return t; };
+  const body = shown.map(it => rowFor(it, cur.get(it), prev && prev.get(it), ly && ly.get(it), colourOf.get(it),
+    spark(months12.map(m12 => { const mm = map.get(m12); return mm ? ((mm.get(it) || {}).s || 0) : null; }), 96, 24)));
+  if (rest.length) body.push(rowFor(`${rest.length} smaller services`, sumOf(cur, rest), sumOf(prev, rest), sumOf(ly, rest), null,
+    spark(months12.map(m12 => { const mm = map.get(m12); return mm ? sumOf(mm, rest).s : null; }), 96, 24)));
+  const tbl = h('table', {class: 'data'},
+    h('thead', null, h('tr', null, ['Service', 'Sales', 'vs last month', 'vs last year', 'Pieces', 'Per piece', 'Share', 'Last 12 months'].map(t => h('th', {scope: 'col'}, t)))),
+    h('tbody', null, body),
+    h('tfoot', null, h('tr', null, h('td', null, 'All services'), h('td', null, money(T.s)), pctCell(TP ? change(T.s, TP.s) : null), pctCell(TL ? change(T.s, TL.s) : null),
+      h('td', null, int(T.p)), h('td', null, T.p > 0 ? money(T.s / T.p) : '—'), h('td', null, '100%'), h('td', null, ''))));
+
+  // one-line highlight: biggest $ movers on last month
+  if (prev){
+    const moves = names.map(it => ({it, d: ((cur.get(it) || {}).s || 0) - ((prev.get(it) || {}).s || 0), b: (prev.get(it) || {}).s || 0})).filter(x => Math.abs(x.d) >= 1).sort((a, b) => b.d - a.d);
+    const up = moves[0], dn = moves[moves.length - 1];
+    const bits = [];
+    if (up && up.d > 0) bits.push(`${up.it} had the biggest lift, ${sMoney(up.d)}${up.b > 0 ? ' (' + sPct(up.d / up.b) + ')' : ''}`);
+    if (dn && dn.d < 0) bits.push(`${dn.it} the biggest drop, ${sMoney(dn.d)}${dn.b > 0 ? ' (' + sPct(dn.d / dn.b) + ')' : ''}`);
+    if (bits.length) card.append(h('p', {class: 'svc-highlight', text: `Compared with ${MONL[+prevMo.slice(5) - 1]}: ${bits.join('; ')}.`}));
+  }
+  card.append(h('div', {class: 'table-scroll'}, tbl));
+  if (names.length > LIMIT + 1) card.append(h('p', {class: 'table-note'}, h('button', {class: 'linkbtn', type: 'button', onclick: () => { state.sel.svcAll = !showAll; render(); }},
+    showAll ? `Show the top ${LIMIT} only` : `Show all ${names.length} services`)));
+
+  const series = top.map(it => ({name: it, color: colourOf.get(it), values: months12.map(m12 => { const mm = map.get(m12); return mm ? ((mm.get(it) || {}).s || 0) : null; })}));
+  const others = ranked.filter(it => !top.includes(it));
+  if (others.length) series.push({name: OTHER, color: 'var(--ly)', values: months12.map(m12 => { const mm = map.get(m12); return mm ? round2(others.reduce((s, it) => s + ((mm.get(it) || {}).s || 0), 0)) : null; })});
+  const host = h('div', {class: 'chart'});
+  charts.push({host, type: 'stack', spec: {isos: months12, hi: 11, monthly: true, label: `Service sales by month for ${who}`, series}});
+  card.append(h('h3', {class: 'sub-h', text: 'Service sales by month — last 12 months'}), host,
+    h('p', {class: 'table-note'}, `From “${S.source || 'the Store Sales by Item report'}”, ${monthLong(S.months[0])} to ${monthLong(S.months[S.months.length - 1])}. The service report is monthly, so this section compares month to month.`));
   return card;
 }
 
@@ -1299,8 +1401,8 @@ function lockScreen(wrapper){
   setTimeout(() => input.focus(), 30);
 }
 function emptyScreen(msg){
-  const drop = h('label', {class: 'drop', tabindex: 0}, h('input', {type: 'file', accept: '.xlsx', hidden: true, onchange: e => e.target.files[0] && handleFile(e.target.files[0])}),
-    h('strong', {text: 'Drop the weekly Excel file here'}), h('span', {text: 'to preview the dashboard on this computer'}));
+  const drop = h('label', {class: 'drop', tabindex: 0}, h('input', {type: 'file', accept: '.xlsx', multiple: true, hidden: true, onchange: e => e.target.files.length && handleFiles(e.target.files)}),
+    h('strong', {text: 'Drop the Excel files here'}), h('span', {text: 'the weekly sales workbook and the Store Sales by Item report — to preview the dashboard on this computer'}));
   wireDrop(drop);
   const box = h('div', {class: 'box'}, brandBlock(),
     h('h2', {text: msg ? 'Couldn’t load the figures' : 'No figures published yet'}),
@@ -1358,7 +1460,8 @@ $('#previewPublish').addEventListener('click', openPanel);
 $('#printBtn').addEventListener('click', () => window.print());
 $('#lockDevice').addEventListener('click', () => { store.del('passcode'); location.reload(); });
 $('#previewDiscard').addEventListener('click', () => {
-  state.preview = null; state.previewName = ''; $('#parseResult').replaceChildren(); updateButtons();
+  state.preview = null; state.previewName = ''; state.pending = {sales: null, services: null};
+  $('#parseResult').replaceChildren(); updateButtons();
   if (state.published){ setData(); showApp(); } else { state.model = null; boot(); }
 });
 
@@ -1382,37 +1485,66 @@ $('#passShow').addEventListener('click', () => { const p = $('#pass'); p.type = 
 function wireDrop(el){
   el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('over'); });
   el.addEventListener('dragleave', () => el.classList.remove('over'));
-  el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+  el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('over'); if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); });
   el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); el.querySelector('input').click(); } });
 }
 wireDrop($('#drop'));
-$('#file').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleFile(f); e.target.value = ''; });
+$('#file').addEventListener('change', e => { if (e.target.files.length) handleFiles(e.target.files); e.target.value = ''; });
 
-async function handleFile(file){
+/* The weekly workbook and the monthly Store Sales by Item report can be dropped together or one at a
+   time. Whichever isn't dropped is carried over from what's already loaded or published.            */
+state.pending = {sales: null, services: null};
+function combinedData(){
+  const base = state.published;
+  const sales = state.pending.sales ? state.pending.sales.data : base ? {source: base.source, sheets: base.sheets} : null;
+  const svc = state.pending.services ? state.pending.services.data : base && base.services && base.services.grain === 'month' ? base.services : null;
+  if (!sales) return null;
+  return {format: FORMAT, schema: SCHEMA, source: sales.source, generatedAt: new Date().toISOString(), sheets: sales.sheets, services: svc};
+}
+async function handleFiles(fileList){
+  const files = [...fileList];
   const out = $('#parseResult');
-  out.replaceChildren(h('div', {class: 'summary'}, h('div', {class: 'ok'}, h('span', {class: 'muted', text: `Reading “${file.name}”…`}))));
-  try {
-    const wbk = await readWorkbook(await file.arrayBuffer());
-    const data = interpretWorkbook(wbk, file.name);
-    const model = buildModel(data);
-    state.preview = data; state.previewName = file.name;
-    setData();
-    const weeksN = model.totalWeeks.length;
-    const svcRows = data.services ? data.services.rows.length : 0;
-    const warns = data._warnings;
-    out.replaceChildren(h('div', {class: 'summary'},
-      h('div', {class: 'ok'},
-        h('strong', {text: `✓ Read ${data.sheets.length} store tab${data.sheets.length === 1 ? '' : 's'}${data.services ? ' and the Services tab' : ''}`}),
-        h('span', {text: `Reporting week: ${fLong(model.latest)} (${weeksN} weeks of sales)`}),
-        h('span', {text: data.services ? (svcRows ? `Services: ${svcRows} row${svcRows === 1 ? '' : 's'} with figures` : 'Services: no figures filled in yet') : 'No Services tab found'}),
-        h('span', {class: 'muted', text: 'The dashboard behind this panel now shows the preview. Publish when it looks right.'})),
-      warns.length ? h('div', {class: 'warns'}, h('b', {text: `Worth a look (${warns.length})`}), h('ul', null, warns.map(w => h('li', {text: w})))) : null));
-    updateButtons();
-    showApp();
-    $('#publishStatus').textContent = ''; $('#publishStatus').className = 'status';
-  } catch (e){
-    out.replaceChildren(h('div', {class: 'summary'}, h('div', {class: 'bad', text: e.message || 'Couldn’t read that file.'})));
+  out.replaceChildren(h('div', {class: 'summary'}, h('div', {class: 'ok'}, h('span', {class: 'muted', text: `Reading ${files.map(f => '“' + f.name + '”').join(' and ')}…`}))));
+  const problems = [];
+  for (const file of files){
+    try {
+      const wbk = await readWorkbook(await file.arrayBuffer());
+      const sales = interpretSales(wbk, file.name), svc = interpretServices(wbk, file.name);
+      if (sales) state.pending.sales = {name: file.name, data: {source: file.name, sheets: sales.sheets}, warnings: sales.warnings};
+      if (svc) state.pending.services = {name: file.name, data: svc.services, warnings: svc.warnings};
+      if (!sales && !svc) problems.push(`“${file.name}” doesn’t look like the weekly sales workbook or the Store Sales by Item report.`);
+    } catch (e){ problems.push(`“${file.name}”: ${e.message || 'couldn’t be read.'}`); }
   }
+  const data = combinedData();
+  let model = null;
+  if (data){
+    try { model = buildModel(data); } catch (e){ problems.push(e.message); }
+  }
+  if (model){
+    state.preview = data;
+    state.previewName = [state.pending.sales && state.pending.sales.name, state.pending.services && state.pending.services.name]
+      .filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).map(n => '“' + n + '”').join(' and ');
+    setData(); updateButtons(); showApp();
+    setStatus('');
+  }
+  renderSummary(model, problems);
+}
+function renderSummary(model, problems){
+  const P = state.pending, base = state.published;
+  const lines = [];
+  if (P.sales) lines.push(h('strong', {text: `✓ Weekly sales — ${P.sales.name}`}), h('span', {text: `${P.sales.data.sheets.length} store tabs · reporting week ${fLong(model ? model.latest : P.sales.data.sheets[0].weeks.slice(-1)[0])}`}));
+  else if (base && model) lines.push(h('strong', {text: '✓ Weekly sales — already published'}), h('span', {text: `Reporting week ${fLong(model.latest)}. Drop the workbook too when it has a new week.`}));
+  else lines.push(h('strong', {class: 'need', text: 'Weekly sales workbook still needed'}), h('span', {text: 'Drop “Average Weekly Sales - All Stores.xlsx” as well.'}));
+  const S = model && model.services;
+  if (P.services) lines.push(h('strong', {text: `✓ Services — ${P.services.name}`}), h('span', {text: `${P.services.data.stores.length} stores · ${monthLong(P.services.data.months[0])} to ${monthLong(P.services.data.months.slice(-1)[0])}`}));
+  else if (S) lines.push(h('strong', {text: '✓ Services — already published'}), h('span', {text: `Runs to ${monthLong(S.months[S.months.length - 1])}. Drop the Store Sales by Item report too once it has a new month.`}));
+  else lines.push(h('strong', {class: 'need', text: 'No service report yet'}), h('span', {text: 'Drop the Store Sales by Item report too, or the Services section stays empty.'}));
+  if (model) lines.push(h('span', {class: 'muted', text: 'The dashboard behind this panel now shows the preview. Publish when it looks right.'}));
+  const warns = [...(P.sales ? P.sales.warnings : []), ...(P.services ? P.services.warnings : [])];
+  $('#parseResult').replaceChildren(h('div', {class: 'summary'},
+    problems.length ? h('div', {class: 'bad'}, problems.map(p => h('div', {text: p}))) : null,
+    h('div', {class: 'ok'}, lines),
+    warns.length ? h('div', {class: 'warns'}, h('b', {text: `Worth a look (${warns.length})`}), h('ul', null, warns.map(w => h('li', {text: w})))) : null));
 }
 
 function setStatus(text, kind){ const s = $('#publishStatus'); s.textContent = text; s.className = 'status ' + (kind || ''); }
@@ -1467,7 +1599,7 @@ $('#publishBtn').addEventListener('click', async () => {
     if (built.pass && $('#passRemember').checked) store.set('passcode', built.pass);
     setStatus(`Published ✓ Week ending ${fMed(latest)} will show on the dashboard link in a minute or two.`, 'ok');
     state.published = state.preview; state.publishedAt = built.publishedAt; state.encrypted = !!built.pass;
-    state.preview = null; state.previewName = '';
+    state.preview = null; state.previewName = ''; state.pending = {sales: null, services: null};
     setData(); showApp(); updateButtons();
     watchLive(built.publishedAt, latest);
   } catch (e){
